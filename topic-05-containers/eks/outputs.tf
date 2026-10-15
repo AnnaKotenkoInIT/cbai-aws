@@ -13,3 +13,10 @@ output "k8s_manifest" {
     node_port = var.node_port
   })
 }
+
+# Ingress для демонстрації ALB: terraform output -raw ingress_manifest | kubectl apply -f -
+output "ingress_manifest" {
+  value = templatefile("${path.module}/ingress.yaml.tftpl", {
+    subnets = join(",", data.aws_subnets.public.ids)
+  })
+}

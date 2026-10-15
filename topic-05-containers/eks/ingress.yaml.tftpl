@@ -1,0 +1,23 @@
+# Ingress: правило «весь HTTP-трафік → Service web». AWS Load Balancer Controller втілює його як ALB.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: web
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    # ALB шле запити напряму на IP подів, оминаючи NodePort
+    alb.ingress.kubernetes.io/target-type: ip
+    # Публічні підмережі теми 3, де ALB створює свої мережеві інтерфейси
+    alb.ingress.kubernetes.io/subnets: ${subnets}
+spec:
+  ingressClassName: alb
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: web
+                port:
+                  number: 80

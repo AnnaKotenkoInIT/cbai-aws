@@ -6,6 +6,10 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 6.0"
     }
+    helm = {
+      source  = "hashicorp/helm"
+      version = "~> 3.0"
+    }
   }
 }
 
@@ -84,6 +88,26 @@ resource "aws_eks_cluster" "main" {
   depends_on = [aws_iam_role_policy_attachment.cluster]
 }
 
+# --- Доступ до Kubernetes у Management Console: root-користувач акаунта стає адміністратором кластера.
+# Без цього вкладка Resources у консолі EKS пише «doesn't have access to Kubernetes objects».
+
+data "aws_caller_identity" "current" {}
+
+resource "aws_eks_access_entry" "console" {
+  cluster_name  = aws_eks_cluster.main.name
+  principal_arn = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+}
+
+resource "aws_eks_access_policy_association" "console" {
+  cluster_name  = aws_eks_cluster.main.name
+  principal_arn = aws_eks_access_entry.console.principal_arn
+  policy_arn    = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
+
+  access_scope {
+    type = "cluster"
+  }
+}
+
 # --- Worker Nodes: Node Group з EC2, на яких запускаються поди
 
 resource "aws_iam_role" "node" {
@@ -136,4 +160,94 @@ resource "aws_vpc_security_group_ingress_rule" "node_port" {
   from_port         = var.node_port
   to_port           = var.node_port
   ip_protocol       = "tcp"
+}
+
+# --- Ingress: AWS Load Balancer Controller створює ALB для кожного об'єкта Ingress.
+# Сам контролер безкоштовний (один под), ALB з'являється лише після kubectl apply Ingress.
+
+# Pod Identity: под контролера отримує IAM-роль без ключів доступу
+resource "aws_eks_addon" "pod_identity" {
+  cluster_name = aws_eks_cluster.main.name
+  addon_name   = "eks-pod-identity-agent"
+
+  depends_on = [aws_eks_node_group.main]
+}
+
+resource "aws_iam_role" "lb_controller" {
+  name = "${var.name}-lb-controller"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "pods.eks.amazonaws.com" }
+      Action    = ["sts:AssumeRole", "sts:TagSession"]
+    }]
+  })
+}
+
+# Офіційна політика контролера v3.5.0 (docs/install/iam_policy.json): керування ALB, target groups і SG
+resource "aws_iam_role_policy" "lb_controller" {
+  role   = aws_iam_role.lb_controller.id
+  policy = file("${path.module}/lb-controller-policy.json")
+}
+
+resource "aws_eks_pod_identity_association" "lb_controller" {
+  cluster_name    = aws_eks_cluster.main.name
+  namespace       = "kube-system"
+  service_account = "aws-load-balancer-controller"
+  role_arn        = aws_iam_role.lb_controller.arn
+}
+
+# Helm ставить контролер у кластер від імені того ж профілю AWS, що й kubectl
+provider "helm" {
+  kubernetes = {
+    host                   = aws_eks_cluster.main.endpoint
+    cluster_ca_certificate = base64decode(aws_eks_cluster.main.certificate_authority[0].data)
+    exec = {
+      api_version = "client.authentication.k8s.io/v1beta1"
+      command     = "aws"
+      args        = ["eks", "get-token", "--cluster-name", aws_eks_cluster.main.name, "--profile", var.aws_profile, "--region", var.region]
+    }
+  }
+
+  # Власні налаштування репозиторіїв Helm, щоб не залежати від локальних `helm repo add`
+  repository_config_path = "${path.module}/.terraform/helm/repositories.yaml"
+  repository_cache       = "${path.module}/.terraform/helm/cache"
+}
+
+resource "helm_release" "lb_controller" {
+  name       = "aws-load-balancer-controller"
+  repository = "https://aws.github.io/eks-charts"
+  chart      = "aws-load-balancer-controller"
+  version    = "3.5.0"
+  namespace  = "kube-system"
+
+  # region і vpcId задаємо явно, щоб контролер не питав їх у метаданих EC2
+  values = [yamlencode({
+    clusterName  = aws_eks_cluster.main.name
+    region       = var.region
+    vpcId        = data.aws_vpc.main.id
+    replicaCount = 1
+  })]
+
+  depends_on = [aws_eks_addon.pod_identity, aws_eks_pod_identity_association.lb_controller, aws_iam_role_policy.lb_controller]
+}
+
+# ALB створює контролер, а не Terraform. Тому під час destroy, поки контролер ще працює,
+# видаляємо всі Ingress — і контролер прибирає свої ALB. Інакше ALB лишився б і заважав видалити VPC.
+resource "terraform_data" "delete_ingresses" {
+  input = {
+    cluster = aws_eks_cluster.main.name
+    profile = var.aws_profile
+    region  = var.region
+  }
+
+  provisioner "local-exec" {
+    when        = destroy
+    working_dir = path.module
+    command     = "aws eks update-kubeconfig --name ${self.input.cluster} --profile ${self.input.profile} --region ${self.input.region} --kubeconfig .terraform/kubeconfig && kubectl --kubeconfig .terraform/kubeconfig delete ingress --all --all-namespaces --wait"
+  }
+
+  depends_on = [helm_release.lb_controller]
 }
