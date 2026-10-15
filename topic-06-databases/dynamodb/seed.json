@@ -1,0 +1,37 @@
+[
+  {
+    "customer_id": { "N": "1" },
+    "product_id": { "N": "3" },
+    "name": { "S": "Клавіатура" },
+    "price": { "N": "1899" },
+    "quantity": { "N": "1" },
+    "added_at": { "S": "2026-10-14T09:30:00Z" }
+  },
+  {
+    "customer_id": { "N": "1" },
+    "product_id": { "N": "4" },
+    "name": { "S": "Монітор" },
+    "price": { "N": "8999" },
+    "quantity": { "N": "2" },
+    "added_at": { "S": "2026-10-14T09:32:00Z" },
+    "options": { "M": { "size": { "S": "27\"" }, "color": { "S": "чорний" } } }
+  },
+  {
+    "customer_id": { "N": "2" },
+    "product_id": { "N": "5" },
+    "name": { "S": "Мишка" },
+    "price": { "N": "799" },
+    "quantity": { "N": "1" },
+    "added_at": { "S": "2026-10-14T11:05:00Z" }
+  },
+  {
+    "customer_id": { "N": "4" },
+    "product_id": { "N": "1" },
+    "name": { "S": "Ноутбук" },
+    "price": { "N": "32999" },
+    "quantity": { "N": "1" },
+    "added_at": { "S": "2026-10-14T15:47:00Z" },
+    "options": { "M": { "ram": { "S": "16 GB" }, "color": { "S": "сірий" } } },
+    "coupon": { "S": "AUTUMN10" }
+  }
+]
